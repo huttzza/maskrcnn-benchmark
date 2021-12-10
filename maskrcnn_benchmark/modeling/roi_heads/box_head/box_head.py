@@ -13,11 +13,10 @@ class ROIBoxHead(torch.nn.Module):
     Generic Box Head class.
     """
 
-    def __init__(self, cfg, in_channels):
+    def __init__(self, cfg):
         super(ROIBoxHead, self).__init__()
-        self.feature_extractor = make_roi_box_feature_extractor(cfg, in_channels)
-        self.predictor = make_roi_box_predictor(
-            cfg, self.feature_extractor.out_channels)
+        self.feature_extractor = make_roi_box_feature_extractor(cfg)
+        self.predictor = make_roi_box_predictor(cfg)
         self.post_processor = make_roi_box_post_processor(cfg)
         self.loss_evaluator = make_roi_box_loss_evaluator(cfg)
 
@@ -50,22 +49,34 @@ class ROIBoxHead(torch.nn.Module):
 
         if not self.training:
             result = self.post_processor((class_logits, box_regression), proposals)
-            return x, result, {}
+            return x, result, {}, x, None
 
-        loss_classifier, loss_box_reg = self.loss_evaluator(
+        loss_classifier, loss_box_reg, _ = self.loss_evaluator(
+            [class_logits], [box_regression]
+        )
+
+        if self.training:
+            with torch.no_grad():
+                da_proposals = self.loss_evaluator.subsample_for_da(proposals, targets)
+
+        da_ins_feas = self.feature_extractor(features, da_proposals)
+        class_logits, box_regression = self.predictor(da_ins_feas)
+        _, _, da_ins_labels = self.loss_evaluator(
             [class_logits], [box_regression]
         )
         return (
             x,
             proposals,
             dict(loss_classifier=loss_classifier, loss_box_reg=loss_box_reg),
+            da_ins_feas,
+            da_ins_labels
         )
 
 
-def build_roi_box_head(cfg, in_channels):
+def build_roi_box_head(cfg):
     """
     Constructs a new box head.
     By default, uses ROIBoxHead, but if it turns out not to be enough, just register a new class
     and make it a parameter in the config
     """
-    return ROIBoxHead(cfg, in_channels)
+    return ROIBoxHead(cfg)

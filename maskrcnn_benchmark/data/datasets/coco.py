@@ -38,7 +38,7 @@ def has_valid_annotation(anno):
 
 class COCODataset(torchvision.datasets.coco.CocoDetection):
     def __init__(
-        self, ann_file, root, remove_images_without_annotations, transforms=None
+        self, ann_file, root, remove_images_without_annotations, transforms=None, is_source= True
     ):
         super(COCODataset, self).__init__(root, ann_file)
         # sort indices for reproducible results
@@ -54,8 +54,6 @@ class COCODataset(torchvision.datasets.coco.CocoDetection):
                     ids.append(img_id)
             self.ids = ids
 
-        self.categories = {cat['id']: cat['name'] for cat in self.coco.cats.values()}
-
         self.json_category_id_to_contiguous_id = {
             v: i + 1 for i, v in enumerate(self.coco.getCatIds())
         }
@@ -63,7 +61,8 @@ class COCODataset(torchvision.datasets.coco.CocoDetection):
             v: k for k, v in self.json_category_id_to_contiguous_id.items()
         }
         self.id_to_img_map = {k: v for k, v in enumerate(self.ids)}
-        self._transforms = transforms
+        self.transforms = transforms
+        self.is_source = is_source
 
     def __getitem__(self, idx):
         img, anno = super(COCODataset, self).__getitem__(idx)
@@ -81,10 +80,12 @@ class COCODataset(torchvision.datasets.coco.CocoDetection):
         classes = torch.tensor(classes)
         target.add_field("labels", classes)
 
-        if anno and "segmentation" in anno[0]:
-            masks = [obj["segmentation"] for obj in anno]
-            masks = SegmentationMask(masks, img.size, mode='poly')
-            target.add_field("masks", masks)
+        masks = [obj["segmentation"] for obj in anno]
+        masks = SegmentationMask(masks, img.size)
+        target.add_field("masks", masks)
+
+        domain_labels = torch.ones_like(classes, dtype=torch.uint8) if self.is_source else torch.zeros_like(classes, dtype=torch.uint8)
+        target.add_field("is_source", domain_labels)
 
         if anno and "keypoints" in anno[0]:
             keypoints = [obj["keypoints"] for obj in anno]
@@ -93,8 +94,8 @@ class COCODataset(torchvision.datasets.coco.CocoDetection):
 
         target = target.clip_to_image(remove_empty=True)
 
-        if self._transforms is not None:
-            img, target = self._transforms(img, target)
+        if self.transforms is not None:
+            img, target = self.transforms(img, target)
 
         return img, target, idx
 
